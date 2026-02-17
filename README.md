@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Spatial Sentinel - Narrowing City Index (scaffold)
+=======
+# Spatial Sentinel - Narrowing City Index
+>>>>>>> 78d0c5dbdde7c9f55ec774963be07ea9bb6ae2f5
 
 Brief project scaffold: a lightweight Python prediction engine to detect sidewalk bottlenecks in Amsterdam by
 fusing static 3D city data with real-time informal barrier detections.
@@ -19,6 +23,7 @@ python3 engine.py --cityjson-url https://example.org/amsterdam_bgt.cityjson --se
 
 Notes:
 - Before running on a Raspberry Pi 500, install dependencies from `requirements.txt`.
+<<<<<<< HEAD
 - Provide a calibrated homography matrix to map camera pixel coordinates to RD New (EPSG:28992). Accepts `.npy` or `.json` with 9 numbers.
 - The `engine.py` file contains example usage and synthetic demonstrations of TPW/RPW. Output `bottlenecks.geojson` can be opened in GIS or converted to CityJSON for 3D Amsterdam viewer.
 
@@ -51,3 +56,7 @@ python3 engine.py --cityjson-url /path/to/your_amsterdam_bgt.cityjson --sensor-u
 ```
 
 If all resources load, the engine will poll `http://localhost:8000/detections.json`, project detections using `homography.npy`, compute TPW/RPW against sidewalks extracted from the CityJSON, and write `test_bottlenecks.geojson` with any detected bottlenecks.
+=======
+- Provide a calibrated homography matrix to map camera pixel coordinates to RD New (EPSG:28992).
+- The `engine.py` file contains example usage and synthetic demonstrations of TPW/RPW.
+>>>>>>> 78d0c5dbdde7c9f55ec774963be07ea9bb6ae2f5
