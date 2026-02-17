@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# Spatial Sentinel - Narrowing City Index (scaffold)
-=======
 # Spatial Sentinel - Narrowing City Index
->>>>>>> 78d0c5dbdde7c9f55ec774963be07ea9bb6ae2f5
 
 Brief project scaffold: a lightweight Python prediction engine to detect sidewalk bottlenecks in Amsterdam by
 fusing static 3D city data with real-time informal barrier detections.
@@ -59,4 +55,3 @@ If all resources load, the engine will poll `http://localhost:8000/detections.js
 =======
 - Provide a calibrated homography matrix to map camera pixel coordinates to RD New (EPSG:28992).
 - The `engine.py` file contains example usage and synthetic demonstrations of TPW/RPW.
->>>>>>> 78d0c5dbdde7c9f55ec774963be07ea9bb6ae2f5
