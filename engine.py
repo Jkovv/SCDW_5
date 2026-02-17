@@ -13,6 +13,10 @@ from typing import List, Tuple, Optional
 import time
 import threading
 import math
+import argparse
+import tempfile
+import os
+import json
 
 import numpy as np
 
@@ -167,12 +171,155 @@ def start_sensor_listener(url: str, callback, poll_interval: float = 0.5):
 	return stop_flag
 
 
+def download_file(url: str, dst: Optional[str] = None, timeout: float = 10.0) -> Optional[str]:
+	"""Download a URL to local file and return path. Returns None on failure."""
+	if requests is None:
+		return None
+	try:
+		r = requests.get(url, stream=True, timeout=timeout)
+		if r.status_code != 200:
+			return None
+		if dst is None:
+			fd, dst = tempfile.mkstemp(suffix='.json')
+			os.close(fd)
+		with open(dst, 'wb') as f:
+			for chunk in r.iter_content(chunk_size=8192):
+				if chunk:
+					f.write(chunk)
+		return dst
+	except Exception:
+		return None
+
+
+def load_homography(path: str) -> Optional[np.ndarray]:
+	"""Load a 3x3 homography from a JSON or NumPy file.
+
+	Accepts .npy (numpy array) or .json with a flat list of 9 values.
+	"""
+	if path.endswith('.npy'):
+		try:
+			return np.load(path)
+		except Exception:
+			return None
+	try:
+		with open(path, 'r') as f:
+			j = json.load(f)
+			arr = np.array(j)
+			if arr.size == 9:
+				return arr.reshape((3,3))
+	except Exception:
+		pass
+	return None
+
+
+def detections_to_obstacles(detections: List[dict], homography: np.ndarray, depth_scale: float = 1.0) -> List[Polygon]:
+	"""Convert detection dicts into ground-plane obstacle polygons in RD coordinates.
+
+	Expected detection dict format (example):
+	  {'bbox': [x1,y1,x2,y2], 'depth': 1.2, 'class': 'trash'}
+
+	Approach: map bottom-left and bottom-right pixel coords through homography to RD.
+	Create a narrow polygon by buffering the segment by an estimated half-width.
+	"""
+	obstacles: List[Polygon] = []
+	for det in detections:
+		try:
+			bbox = det.get('bbox', None)
+			if bbox is None or len(bbox) != 4:
+				continue
+			x1, y1, x2, y2 = bbox
+			# bottom-left, bottom-right in pixel space (image origin top-left)
+			bl = (x1, y2)
+			br = (x2, y2)
+			p_bl = project_pixel_to_rd(homography, bl, det.get('depth', 1.0))
+			p_br = project_pixel_to_rd(homography, br, det.get('depth', 1.0))
+			seg = LineString([p_bl, p_br])
+			depth = float(det.get('depth', 1.0)) * depth_scale
+			# estimate half-width (meters): use bbox pixel height mapped to meters via depth proxy
+			pixel_height = max(1.0, abs(y2 - y1))
+			half_w = max(0.2, min(1.5, depth * 0.25))
+			poly = seg.buffer(half_w, cap_style=2)
+			obstacles.append(poly)
+		except Exception:
+			continue
+	return obstacles
+
+
+def process_sensor_payload(payload: dict, sidewalks_gdf, homography: np.ndarray, out_geojson_path: str = 'bottlenecks.geojson'):
+	"""Process a JSON payload from the Pi500: project detections, compute RPW and emit alerts/features.
+
+	sidewalks_gdf: GeoDataFrame in EPSG:28992 containing sidewalk polygons.
+	"""
+	features = []
+	dets = payload.get('detections') or payload.get('objects') or []
+	obstacles = detections_to_obstacles(dets, homography)
+
+	# For each obstacle, find nearest sidewalk polygon and compute TPW/RPW
+	if sidewalks_gdf is None or sidewalks_gdf.empty:
+		return
+
+	for obs in obstacles:
+		centroid = obs.centroid
+		# spatial index usage if available
+		candidates = sidewalks_gdf
+		try:
+			if hasattr(sidewalks_gdf, 'sindex') and sidewalks_gdf.sindex is not None:
+				idx = list(sidewalks_gdf.sindex.nearest((centroid.x, centroid.y, centroid.x, centroid.y), 1))
+				candidates = sidewalks_gdf.iloc[idx]
+		except Exception:
+			candidates = sidewalks_gdf
+
+		for _, row in candidates.iterrows():
+			poly = row.geometry
+			if not poly.contains(centroid):
+				continue
+			# choose a point inside poly to evaluate TPW (centroid)
+			pt = (centroid.x, centroid.y)
+			tpw, seg, ang = sample_cross_section(poly, pt, angles=24)
+			rpw = compute_rpw_from_segment(seg, [obs])
+			props = {
+				'tpw': float(tpw),
+				'rpw': float(rpw),
+				'alert': bool(rpw < 0.9),
+			}
+			geom = obs.__geo_interface__
+			feat = {'type':'Feature','geometry':geom,'properties':props}
+			features.append(feat)
+			if props['alert']:
+				print(f"Bottleneck ALERT: RPW={rpw:.2f}m at {pt}")
+
+	if features:
+		geo = generate_bottleneck_geojson(features)
+		try:
+			with open(out_geojson_path, 'w') as f:
+				json.dump(geo, f)
+			print(f"Wrote {len(features)} features to {out_geojson_path}")
+		except Exception:
+			pass
+
+
 def ingest_cityjson_sidewalks(path: str):
 	"""Attempt to ingest sidewalks from a CityJSON using `cjio`.
 
 	Returns a GeoDataFrame of sidewalk polygons in EPSG:28992 if possible.
 	This function is tolerant: if `cjio` is not installed or file not available, it returns None.
 	"""
+	# If the input is a GeoJSON/GeoPackage, prefer GeoPandas read
+	if gpd is not None:
+		try:
+			if path.lower().endswith(('.geojson', '.json', '.gpkg', '.shp')):
+				gdf = gpd.read_file(path)
+				if gdf is not None and not gdf.empty:
+					# Ensure CRS is set to RD New for downstream math (user should provide correct CRS)
+					if gdf.crs is None:
+						gdf.set_crs('EPSG:28992', inplace=True)
+					else:
+						gdf = gdf.to_crs('EPSG:28992')
+					return gdf
+		except Exception:
+			pass
+
+	# Fallback: try CityJSON via cjio
 	try:
 		import cjio
 	except Exception:
@@ -218,17 +365,50 @@ def generate_bottleneck_geojson(features: List[dict]) -> dict:
 
 
 if __name__ == '__main__':
-	# quick local demo of TPW/RPW on a synthetic sidewalk polygon and an obstacle
-	from shapely.geometry import Polygon
+	parser = argparse.ArgumentParser(description='Spatial Sentinel engine CLI')
+	parser.add_argument('--cityjson-url', required=True, help='URL to CityJSON (BGT) file or local path')
+	parser.add_argument('--sensor-url', required=True, help='URL for Pi500 JSON feed')
+	parser.add_argument('--homography', required=True, help='Path to homography (.npy or .json)')
+	parser.add_argument('--output', help='Output GeoJSON path', default='bottlenecks.geojson')
+	args = parser.parse_args()
 
-	# synthetic sidewalk (simple rectangle)
-	sidewalk = Polygon([(0,0),(10,0),(10,3),(0,3)])
-	pt = (5,1.5)
-	tpw, seg, angle = sample_cross_section(sidewalk, pt, angles=36)
-	print(f"TPW approx: {tpw:.2f} m, segment: {seg}, angle: {angle:.2f} rad")
+	# Download/load CityJSON
+	src = args.cityjson_url
+	path = None
+	if src.startswith('http://') or src.startswith('https://'):
+		print('Downloading CityJSON...')
+		path = download_file(src)
+	else:
+		path = src if os.path.exists(src) else None
 
-	# synthetic obstacle occupying right half of the segment
-	obs = Polygon([(6,0.5),(10,0.5),(10,2.5),(6,2.5)])
-	rpw = compute_rpw_from_segment(seg, [obs])
-	print(f"RPW after obstacle: {rpw:.2f} m")
+	if not path:
+		print('Error: CityJSON path not available or download failed')
+		raise SystemExit(2)
+
+	sidewalks = ingest_cityjson_sidewalks(path)
+	if sidewalks is None or sidewalks.empty:
+		print('Error: failed to extract sidewalks from CityJSON')
+		raise SystemExit(3)
+	print(f'Loaded {len(sidewalks)} sidewalk polygons')
+
+	# Load homography
+	hom = load_homography(args.homography)
+	if hom is None:
+		print('Error: failed to load homography file')
+		raise SystemExit(4)
+
+	# Start sensor listener and require live data
+	def cb(payload):
+		try:
+			process_sensor_payload(payload, sidewalks, hom, out_geojson_path=args.output)
+		except Exception as e:
+			print('Error processing payload:', e)
+
+	print('Starting sensor listener (live mode)...')
+	stop = start_sensor_listener(args.sensor_url, cb)
+	try:
+		while True:
+			time.sleep(1.0)
+	except KeyboardInterrupt:
+		stop.set()
 
