@@ -1,4 +1,4 @@
-# Spatial Sentinel — Narrowing City Index (scaffold)
+# Spatial Sentinel - Narrowing City Index
 
 Brief project scaffold: a lightweight Python prediction engine to detect sidewalk bottlenecks in Amsterdam by
 fusing static 3D city data with real-time informal barrier detections.
