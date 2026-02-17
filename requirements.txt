@@ -1,0 +1,8 @@
+cjio
+geopandas
+numpy
+pyproj
+requests
+scikit-learn
+joblib
+shapely
