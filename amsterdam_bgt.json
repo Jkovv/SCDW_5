@@ -1,1 +1,8 @@
-{"type": "https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html#sec10.5.1 404 Not Found", "title": "Not Found (404)", "detail": "", "status": 404, "instance": "https://api.data.amsterdam.nl/v1/bgt/stadsdeel/centrum/cityjson"}
+{
+"type": "FeatureCollection",
+"name": "amsterdam_bgt",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:EPSG::28992" } },
+"features": [
+{ "type": "Feature", "properties": { "functie": "voetpad" }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 125400.0, 483300.0 ], [ 125900.0, 483300.0 ], [ 125900.0, 483800.0 ], [ 125400.0, 483800.0 ], [ 125400.0, 483300.0 ] ] ] } }
+]
+}
